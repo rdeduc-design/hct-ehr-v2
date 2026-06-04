@@ -1,0 +1,11 @@
+# Minimal Supabase CLI config. Run `supabase init` to regenerate the full file.
+project_id = "hct-ehr"
+
+[db]
+major_version = 15
+
+[functions.adaptive-vitals]
+verify_jwt = true
+
+[functions.generate-report]
+verify_jwt = true

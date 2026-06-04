@@ -1,0 +1,14 @@
+{
+  "name": "hct-ehr",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HCT Academy EHR — modular front-end + Supabase backend (startup MVP).",
+  "type": "module",
+  "scripts": {
+    "dev": "npx --yes serve public -l 5173",
+    "db:reset": "supabase db reset",
+    "db:push": "supabase db push",
+    "fn:serve": "supabase functions serve",
+    "fn:deploy": "supabase functions deploy adaptive-vitals generate-report"
+  }
+}
