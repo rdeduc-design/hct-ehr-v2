@@ -5,8 +5,8 @@
 //  (api.js falls back to localStorage so the app is usable with zero backend).
 // ============================================================================
 export const CONFIG = {
-  SUPABASE_URL: "",        // e.g. "https://xxxx.supabase.co"
-  SUPABASE_ANON_KEY: "",   // public anon key
+  SUPABASE_URL: "https://srkvgzvovuuyzcctgpes.supabase.co",        // e.g. "https://xxxx.supabase.co"
+  SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNya3ZnenZvdnV1eXpjY3RncGVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1MDM5NTIsImV4cCI6MjA5NjA3OTk1Mn0.jBT6X9Mek5TDkYXMrWrcI51msGcYrp7-c5EIc5qj0t8",   // public anon key
 
   // When true (or when URL/key are blank), all data ops use a localStorage
   // adapter instead of Supabase. Lets students demo on GitHub Pages offline.
