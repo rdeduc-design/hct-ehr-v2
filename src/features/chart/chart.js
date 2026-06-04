@@ -1,25 +1,75 @@
 // ============================================================================
-//  features/chart/chart.js — the patient chart orchestrator.
-//  Renders the left section nav + the allergy/identity banner + the active
-//  section, joins the realtime channel for collaborative charting & presence,
-//  and wires the Print Report button to the server-rendered report.
+//  features/chart/chart.js — patient chart orchestrator.
+//  Full NAV taxonomy matching the reference EHR.
 // ============================================================================
 import { api } from "../../core/api.js";
 import { store } from "../../core/store.js";
 import { renderShell } from "../../ui/shell.js";
 import { realtime } from "../../core/realtime.js";
-import { initials, statusTag } from "../../ui/components.js";
+import { initials } from "../../ui/components.js";
 import { toast } from "../../ui/toast.js";
 import * as sections from "./sections.js";
 
-// Section registry — add a panel here and it appears in the nav. Mirrors the
-// existing NAV taxonomy; only the MVP-complete sections are wired so far.
-const SECTIONS = [
-  { key: "summary",  label: "Visit Summary",  render: sections.summary },
-  { key: "vitals",   label: "Vital Signs",    render: sections.vitals  },
-  { key: "mar",      label: "MAR",            render: sections.mar     },
-  { key: "notes",    label: "Notes",          render: sections.notes   },
+// ── NAV taxonomy: groups with child sections ────────────────────────────────
+const NAV = [
+  { label: "Patient Info", children: [
+    { key: "summary",   label: "Visit Summary" },
+    { key: "adminfo",   label: "Admission Info" },
+    { key: "hpi",       label: "History & Physical" },
+    { key: "pmsh",      label: "PMSH" },
+  ]},
+  { label: "Nursing", children: [
+    { key: "careplan",  label: "Care Plan" },
+    { key: "sbar",      label: "SBAR Handoff" },
+    { key: "notes",     label: "Notes" },
+  ]},
+  { label: "Medications", children: [
+    { key: "mar",       label: "MAR" },
+  ]},
+  { label: "Monitoring", children: [
+    { key: "vitals",    label: "Vital Signs" },
+    { key: "gcs",       label: "GCS" },
+    { key: "morse",     label: "Morse Falls Scale" },
+    { key: "braden",    label: "Braden Scale" },
+    { key: "news2",     label: "NEWS2" },
+  ]},
+  { label: "Diagnostics", children: [
+    { key: "labs",      label: "Labs" },
+  ]},
+  { label: "Fluid Balance", children: [
+    { key: "io",        label: "Intake & Output" },
+  ]},
+  { label: "Allergies", children: [
+    { key: "allergies", label: "Allergies" },
+  ]},
+  { label: "Immunizations", children: [
+    { key: "immunizations", label: "Immunizations" },
+  ]},
 ];
+
+// Flat map key → render fn
+const SECTION_FNS = {
+  summary:      sections.summary,
+  adminfo:      sections.adminfo,
+  hpi:          sections.hpi,
+  pmsh:         sections.pmsh,
+  careplan:     sections.careplan,
+  sbar:         sections.sbar,
+  notes:        sections.notes,
+  mar:          sections.mar,
+  vitals:       sections.vitals,
+  gcs:          sections.gcs,
+  morse:        sections.morse,
+  braden:       sections.braden,
+  news2:        sections.news2,
+  labs:         sections.labs,
+  io:           sections.io,
+  allergies:    sections.allergies,
+  immunizations:sections.immunizations,
+};
+
+const SECTION_LABELS = {};
+NAV.forEach(g => g.children.forEach(c => { SECTION_LABELS[c.key] = c.label; }));
 
 export async function renderChart(patientId, section = "summary") {
   const p = await api.patient(patientId);
@@ -34,50 +84,92 @@ export async function renderChart(patientId, section = "summary") {
   ]);
 
   const allergies = await api.allergies(p);
-  const allergyChips = allergies.length
-    ? allergies.map((a) => `<span class="allergy-chip">⚠ ${a.substance}</span>`).join(" ")
-    : `<span class="sec-sub">NKDA</span>`;
+  const allergyTag = allergies.length
+    ? `<span class="chart-tag ctag-allergy-yes">⚠ ${allergies.length} ALLERG${allergies.length > 1 ? "IES" : "Y"}</span>`
+    : `<span class="chart-tag ctag-allergy-none">NKDA</span>`;
+  const age = p.dob ? calcAge(p.dob) : (p.age ?? "");
+  const sectionLabel = SECTION_LABELS[section] || section;
 
   view.innerHTML = `
     <div class="chart-wrap">
-      <div class="chart-nav" id="chart-nav">
-        ${SECTIONS.map((s) => `<div class="nav-item ${s.key === section ? "active" : ""}" data-sec="${s.key}">${s.label}</div>`).join("")}
-      </div>
-      <div class="chart-main">
-        <div class="banner ${p.status === "critical" ? "crit" : ""}">
-          <div class="px-av">${initials(p.full_name)}</div>
-          <div style="flex:1">
-            <div class="px-name">${p.full_name} ${statusTag(p.status)}</div>
-            <div class="px-meta">MRN ${p.mrn} · ${p.room || ""} · ${p.chief_complaint || ""}</div>
-            <div style="margin-top:6px">${allergyChips}</div>
-          </div>
-          <div style="text-align:right">
-            <div id="presence" class="presence"></div>
-            <button class="btn-sm ghost" id="print-report">Print Report</button>
+      <div class="chart-nav">
+        <div class="sb-px">
+          <div class="sb-px-name">${p.full_name}</div>
+          <div class="sb-px-meta">${p.room || ""} · ${age ? age + "y" : ""} ${p.sex || ""}</div>
+          <div class="sb-badges">
+            <span class="sb-badge bb-teal">${p.status || "admitted"}</span>
+            ${allergies.length ? `<span class="sb-badge bb-red">⚠ Allergy</span>` : ""}
           </div>
         </div>
-        <div id="section-root">Loading…</div>
+        <div class="sb-nav" id="sb-nav">
+          ${buildNav(section)}
+        </div>
+      </div>
+      <div class="chart-main">
+        <div class="chart-banner">
+          <div class="chart-banner-left">
+            <div class="chart-avatar-ph">${initials(p.full_name)}</div>
+            <div class="chart-patient-info">
+              <div class="chart-pt-name">
+                ${p.full_name}
+                <span class="chart-mrn">MRN ${p.mrn || "—"}</span>
+              </div>
+              <div class="chart-pt-row1">
+                <span>${age ? age + " y/o" : ""} ${p.sex || ""}</span>
+                ${p.room ? `<span>Room ${p.room}</span>` : ""}
+                ${p.admitting_physician ? `<span>Dr. ${p.admitting_physician}</span>` : ""}
+              </div>
+              <div class="chart-pt-row2">
+                <span class="chart-tag ctag-dx">${p.chief_complaint || p.admitting_diagnosis || "—"}</span>
+                ${allergyTag}
+              </div>
+            </div>
+          </div>
+          <div style="padding:12px 16px;display:flex;align-items:center;gap:8px;flex-shrink:0">
+            <div id="presence" class="presence"></div>
+            <button class="tb-btn" id="print-report">&#128438; Print</button>
+          </div>
+        </div>
+        <div class="ehr-ch">
+          <div>
+            <div class="ehr-ct">${sectionLabel}</div>
+          </div>
+        </div>
+        <div class="ehr-body" id="section-root">Loading…</div>
       </div>
     </div>`;
 
-  // section nav
-  view.querySelectorAll("[data-sec]").forEach((el) =>
-    el.addEventListener("click", () => location.hash = `#/chart/${patientId}/${el.dataset.sec}`));
+  // nav item clicks
+  view.querySelector("#sb-nav").addEventListener("click", e => {
+    const item = e.target.closest("[data-sec]");
+    if (item) navigate(`#/chart/${patientId}/${item.dataset.sec}`);
+    // group expand/collapse (parent rows)
+    const parent = e.target.closest("[data-group]");
+    if (parent) {
+      const key = parent.dataset.group;
+      const kids = document.getElementById(`nav-group-${key}`);
+      const chev = parent.querySelector(".nav-chev");
+      if (kids) {
+        const hidden = kids.style.display === "none";
+        kids.style.display = hidden ? "block" : "none";
+        if (chev) chev.classList.toggle("open", hidden);
+      }
+    }
+  });
 
-  // render active section
-  const sec = SECTIONS.find((s) => s.key === section) || SECTIONS[0];
-  await sec.render(p, view.querySelector("#section-root"));
+  const sectionEl = view.querySelector("#section-root");
+  const renderFn = SECTION_FNS[section] || SECTION_FNS.summary;
+  await renderFn(p, sectionEl);
 
-  // realtime: presence + live inserts re-render the open section
+  // realtime
   const session = store.get("session");
-  realtime.join(p.encounter_id, session?.user || { email: "demo" }, (table) => {
+  realtime.join(p.encounter_id, session?.user || { email: "demo" }, table => {
     toast(`Live update: ${table.replace("_", " ")}`);
-    sec.render(p, view.querySelector("#section-root"));
+    renderFn(p, sectionEl);
   });
   renderPresence();
   store.subscribe(renderPresence);
 
-  // print/report — server-rendered HTML printed via hidden iframe (fixes blank print)
   view.querySelector("#print-report").onclick = async () => {
     try {
       const html = await api.generateReport(p);
@@ -85,9 +177,38 @@ export async function renderChart(patientId, section = "summary") {
       iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
       document.body.appendChild(iframe);
       iframe.srcdoc = html;
-      iframe.onload = () => { iframe.contentWindow.focus(); iframe.contentWindow.print(); setTimeout(() => iframe.remove(), 1000); };
+      iframe.onload = () => {
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+        setTimeout(() => iframe.remove(), 1000);
+      };
     } catch (e) { toast("Report failed: " + (e.message || e), { kind: "crit" }); }
   };
+}
+
+function buildNav(activeSection) {
+  return NAV.map((group, gi) => {
+    const isGroupActive = group.children.some(c => c.key === activeSection);
+    const children = group.children.map(c => `
+      <div class="nav-child ${c.key === activeSection ? "active" : ""}" data-sec="${c.key}">${c.label}</div>
+    `).join("");
+    return `
+      <div class="nav-item parent" data-group="g${gi}">
+        <span>${group.label}</span>
+        <span class="nav-chev ${isGroupActive ? "open" : ""}">▾</span>
+      </div>
+      <div class="nav-children" id="nav-group-g${gi}" style="display:${isGroupActive || gi === 0 ? "block" : "none"}">
+        ${children}
+      </div>`;
+  }).join("");
+}
+
+function calcAge(dob) {
+  const d = new Date(dob);
+  const today = new Date();
+  let age = today.getFullYear() - d.getFullYear();
+  if (today.getMonth() < d.getMonth() || (today.getMonth() === d.getMonth() && today.getDate() < d.getDate())) age--;
+  return age;
 }
 
 function renderPresence() {
@@ -95,6 +216,6 @@ function renderPresence() {
   if (!box) return;
   const people = store.get("presence") || [];
   box.innerHTML = people.length
-    ? `<span class="live-dot"></span> ` + people.map((n) => `<span class="px-av">${initials(n)}</span>`).join("")
+    ? `<span class="live-dot"></span> ` + people.map(n => `<div class="px-av" style="width:22px;height:22px;font-size:8px">${initials(n)}</div>`).join("")
     : "";
 }
